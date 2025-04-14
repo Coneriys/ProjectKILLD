@@ -1163,8 +1163,8 @@ end)
 
 -- GUI Setup
 local Window = library:NewWindow({
-    title = "Project KILLD | Jailbreak",
-    size = UDim2.new(0, 510, 0, 600)
+    title = "Project KILLD | Jailbreak", -- Mainwindow Text
+    size = UDim2.new(0, 510, 0.6, 6)
 })
 
 -- Create Tabs
@@ -1180,15 +1180,16 @@ local SettingsTab = library:CreateSettingsTab(Window)
 local MainSection = MainTab:AddSection("Information", 1)
 
 -- Casino Code Display
-MainSection:AddLabel({
+local casinoCodeText = MainSection:AddButton({
+    enabled = true,
     text = "Casino Code: Checking...",
-    flag = "CasinoCodeLabel"
+    callback = function() end  -- Empty callback since it's just for display
 })
 
--- Update casino code label
+-- Then instead of updating a label, we would update the button text:
 spawn(function()
     while wait(1) do
-        MainSection:UpdateLabel("CasinoCodeLabel", "Casino Code: " .. casinoCode)
+        casinoCodeText:SetText("Casino Code: " .. casinoCode)
     end
 end)
 
@@ -1418,40 +1419,27 @@ MovementSection:AddToggle({
     callback = function(value)
         Config.Movement.FlyEnabled = value
         flying = value
-        
-        if value and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
-            LocalPlayer.Character.Humanoid.CameraOffset = Vector3.new(2, 0, 0)
-        else
-            if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
-                LocalPlayer.Character.Humanoid.CameraOffset = Vector3.new(0, 0, 0)
-            end
-        end
     end
 }):AddBind({
+    enabled = true,
+    text = "Fly Keybind",
     bind = "F",
     flag = "FlyKeybind",
     mode = "toggle",
     callback = function(value)
         Config.Movement.FlyEnabled = value
         flying = value
-        
-        if value and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
-            LocalPlayer.Character.Humanoid.CameraOffset = Vector3.new(2, 0, 0)
-        else
-            if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
-                LocalPlayer.Character.Humanoid.CameraOffset = Vector3.new(0, 0, 0)
-            end
-        end
     end
 })
 
 MovementSection:AddSlider({
+    enabled = true,
     text = "Fly Speed",
     flag = "FlySpeed",
+    suffix = "",
     min = 50,
     max = 600,
     increment = 50,
-    value = Config.Movement.FlySpeed,
     callback = function(value)
         Config.Movement.FlySpeed = value
     end
