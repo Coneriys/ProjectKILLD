@@ -103,6 +103,33 @@ local Config = {
         ShootThroughWalls = false,
         ReducedShotgunSpread = false,
         SingleShotgunBullet = false
+    },
+    AntiAim = {
+        Enabled = false,
+        SpinSpeed = 20,  -- Rotations per second
+        YawOffset = 0,   -- Horizontal spin offset
+        PitchOffset = 0, -- Vertical tilt
+        SpinMode = "Spin" -- "Spin", "Jitter", or "Static"
+    },
+    WorldMods = {
+        Enabled = false,
+        TerrainColor = Color3.fromRGB(0, 255, 0), -- Default green
+        AmbientColor = Color3.fromRGB(255, 255, 255), -- Default white
+        BrightnessLevel = 1 -- Normal brightness
+    },
+    Aimbot = {
+        Enabled = false,
+        SilentAim = false,
+        FOV = 200,
+        FOVVisible = true,
+        FOVColor = Color3.fromRGB(255, 255, 255),
+        TeamCheck = true,
+        TargetPart = "Head", -- Head, Torso, etc.
+        Smoothness = 0.5 -- Lower = faster (for visible aimbot)
+    },
+    Camera = {
+        CustomFOV = false,
+        FOVValue = 70 -- Default FOV
     }
 }
 
@@ -259,6 +286,46 @@ local function getVelocity(pos1, pos2, speed)
     local distance = (pos2 - pos1)
     local mag = distance.Magnitude
     return (distance/mag) * speed
+end
+
+-- Function to implement spinbot
+local function setupAntiAim()
+    local lastUpdateTime = tick()
+    local currentRotation = 0
+    
+    RunService.Heartbeat:Connect(function()
+        if not Config.AntiAim.Enabled then return end
+        if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return end
+        
+        local hrp = LocalPlayer.Character.HumanoidRootPart
+        local deltaTime = tick() - lastUpdateTime
+        lastUpdateTime = tick()
+        
+        if Config.AntiAim.SpinMode == "Spin" then
+            -- Regular spinning motion
+            currentRotation = currentRotation + deltaTime * Config.AntiAim.SpinSpeed * 360
+            if currentRotation >= 360 then currentRotation = currentRotation - 360 end
+            
+            -- Apply rotation
+            hrp.CFrame = CFrame.new(hrp.Position) * 
+                        CFrame.Angles(math.rad(Config.AntiAim.PitchOffset), 
+                                     math.rad(currentRotation + Config.AntiAim.YawOffset), 0)
+                                     
+        elseif Config.AntiAim.SpinMode == "Jitter" then
+            -- Rapid direction changes
+            currentRotation = (math.floor(tick() * Config.AntiAim.SpinSpeed) % 2 == 0) and 90 or -90
+            
+            hrp.CFrame = CFrame.new(hrp.Position) * 
+                        CFrame.Angles(math.rad(Config.AntiAim.PitchOffset), 
+                                     math.rad(currentRotation + Config.AntiAim.YawOffset), 0)
+                                     
+        elseif Config.AntiAim.SpinMode == "Static" then
+            -- Fixed angle
+            hrp.CFrame = CFrame.new(hrp.Position) * 
+                        CFrame.Angles(math.rad(Config.AntiAim.PitchOffset), 
+                                     math.rad(Config.AntiAim.YawOffset), 0)
+        end
+    end)
 end
 
 -- Feature Functions
@@ -529,6 +596,121 @@ local function setupCrateESP()
                 end
             end
         end
+    end)
+end
+
+-- Aimbot and FOV Circle
+local FOVCircle = Drawing.new("Circle")
+FOVCircle.Thickness = 2
+FOVCircle.NumSides = 50
+FOVCircle.Radius = 200
+FOVCircle.Filled = false
+FOVCircle.Visible = false
+FOVCircle.ZIndex = 999
+FOVCircle.Transparency = 1
+FOVCircle.Color = Color3.fromRGB(255, 255, 255)
+
+-- Target for aimbot
+local Target = nil
+
+-- Functions to implement features
+local function setupWorldMods()
+    -- Setup terrain color changing
+    local terrain = workspace:FindFirstChildOfClass("Terrain")
+    if not terrain then return end
+    
+    -- Track changes to the color config
+    RunService.RenderStepped:Connect(function()
+        if Config.WorldMods.Enabled then
+            -- Apply terrain color
+            terrain.WaterColor = Config.WorldMods.TerrainColor
+            terrain.WaterReflectance = 0.1 -- Reduce reflectance for better color visibility
+            
+            -- Apply ambient
+            game:GetService("Lighting").Ambient = Config.WorldMods.AmbientColor
+            game:GetService("Lighting").Brightness = Config.WorldMods.BrightnessLevel
+        end
+    end)
+end
+
+local function setupCameraFOV()
+    -- Setup custom camera FOV
+    RunService.RenderStepped:Connect(function()
+        if Config.Camera.CustomFOV then
+            workspace.CurrentCamera.FieldOfView = Config.Camera.FOVValue
+        end
+    end)
+end
+
+local function getClosestPlayerToCursor(fov)
+    local closestPlayer = nil
+    local shortestDistance = fov or math.huge
+    
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("Humanoid") and 
+           player.Character.Humanoid.Health > 0 and player.Character:FindFirstChild(Config.Aimbot.TargetPart) then
+            
+            -- Team check if enabled
+            if Config.Aimbot.TeamCheck and player.Team == LocalPlayer.Team then
+                continue
+            end
+            
+            local pos = Camera:WorldToViewportPoint(player.Character[Config.Aimbot.TargetPart].Position)
+            if pos.Z > 0 then
+                local screenPos = Vector2.new(pos.X, pos.Y)
+                local mousePos = Vector2.new(Mouse.X, Mouse.Y)
+                local distance = (screenPos - mousePos).Magnitude
+                
+                if distance < shortestDistance then
+                    closestPlayer = player
+                    shortestDistance = distance
+                end
+            end
+        end
+    end
+    
+    return closestPlayer
+end
+
+local function setupAimbot()
+    -- Manage FOV circle visibility
+    RunService.RenderStepped:Connect(function()
+        FOVCircle.Position = Vector2.new(Mouse.X, Mouse.Y)
+        FOVCircle.Radius = Config.Aimbot.FOV
+        FOVCircle.Visible = Config.Aimbot.Enabled and Config.Aimbot.FOVVisible
+        FOVCircle.Color = Config.Aimbot.FOVColor
+    end)
+    
+    -- Silent aim by intercepting hit registration
+    local oldNamecall
+    oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+        local args = {...}
+        local method = getnamecallmethod()
+        
+        -- Look for hit registration remote events (may need to adjust based on the game)
+        if Config.Aimbot.Enabled and (method == "FireServer" or method == "InvokeServer") and 
+           typeof(self) == "Instance" and (self.Name:find("Hit") or self.Name:find("Damage")) then
+            
+            Target = getClosestPlayerToCursor(Config.Aimbot.FOV)
+            
+            if Target and Target.Character and Target.Character:FindFirstChild(Config.Aimbot.TargetPart) then
+                -- Check team if enabled
+                if Config.Aimbot.TeamCheck and Target.Team == LocalPlayer.Team then
+                    return oldNamecall(self, ...)
+                end
+                
+                -- Modify the hit arguments - exact structure depends on the game
+                -- We'll need to do some investigation to find the exact format
+                -- This is a simplified example
+                if typeof(args[1]) == "Instance" then
+                    args[1] = Target.Character[Config.Aimbot.TargetPart]
+                elseif typeof(args[1]) == "CFrame" then
+                    args[1] = Target.Character[Config.Aimbot.TargetPart].CFrame
+                end
+            end
+        end
+        
+        return oldNamecall(self, ...)
     end)
 end
 
@@ -1542,6 +1724,222 @@ UtilitySection:AddToggle({
     end
 })
 
+-- Creating AntiAim tab in UI
+local AATab = Window:AddTab("Anti-Aim")
+local AASection = AATab:AddSection("Spinbot", 1)
+
+AASection:AddToggle({
+    enabled = true,
+    text = "Enable Anti-Aim",
+    state = Config.AntiAim.Enabled,
+    flag = "AntiAim_Enabled",
+    callback = function(value)
+        Config.AntiAim.Enabled = value
+    end
+})
+
+AASection:AddList({
+    enabled = true,
+    text = "Spin Mode", 
+    tooltip = "Type of rotation to apply",
+    selected = Config.AntiAim.SpinMode,
+    multi = false,
+    values = {"Spin", "Jitter", "Static"},
+    flag = "AntiAim_Mode",
+    callback = function(value)
+        Config.AntiAim.SpinMode = value
+    end
+})
+
+AASection:AddSlider({
+    enabled = true,
+    text = "Spin Speed",
+    flag = "AntiAim_Speed",
+    suffix = " rps",
+    min = 1,
+    max = 100,
+    increment = 1,
+    value = Config.AntiAim.SpinSpeed,
+    callback = function(value)
+        Config.AntiAim.SpinSpeed = value
+    end
+})
+
+AASection:AddSlider({
+    enabled = true,
+    text = "Yaw Offset",
+    flag = "AntiAim_Yaw",
+    suffix = "°",
+    min = 0,
+    max = 360,
+    increment = 15,
+    value = Config.AntiAim.YawOffset,
+    callback = function(value)
+        Config.AntiAim.YawOffset = value
+    end
+})
+
+AASection:AddSlider({
+    enabled = true,
+    text = "Pitch Offset",
+    flag = "AntiAim_Pitch",
+    suffix = "°",
+    min = -89,
+    max = 89,
+    increment = 5,
+    value = Config.AntiAim.PitchOffset,
+    callback = function(value)
+        Config.AntiAim.PitchOffset = value
+    end
+})
+
+-- UI Tabs for the new features
+local AimbotTab = Window:AddTab("Aimbot")
+local VisualTab = Window:AddTab("Visuals")
+
+-- Aimbot UI - Simplified for silent aim only
+local AimbotSection = AimbotTab:AddSection("Silent Aim", 1)
+
+AimbotSection:AddToggle({
+    enabled = true,
+    text = "Enable Silent Aim",
+    state = Config.Aimbot.Enabled,
+    flag = "Aimbot_Enabled",
+    callback = function(value)
+        Config.Aimbot.Enabled = value
+        Config.Aimbot.SilentAim = value
+    end
+})
+
+AimbotSection:AddToggle({
+    enabled = true,
+    text = "Team Check",
+    state = Config.Aimbot.TeamCheck,
+    flag = "Aimbot_TeamCheck",
+    callback = function(value)
+        Config.Aimbot.TeamCheck = value
+    end
+})
+
+AimbotSection:AddToggle({
+    enabled = true,
+    text = "Show FOV Circle",
+    state = Config.Aimbot.FOVVisible,
+    flag = "FOV_Visible",
+    callback = function(value)
+        Config.Aimbot.FOVVisible = value
+    end
+})
+
+AimbotSection:AddSlider({
+    enabled = true,
+    text = "FOV Size",
+    flag = "Aimbot_FOV",
+    suffix = "px",
+    min = 50,
+    max = 800,
+    increment = 10,
+    value = Config.Aimbot.FOV,
+    callback = function(value)
+        Config.Aimbot.FOV = value
+    end
+})
+
+AimbotSection:AddList({
+    enabled = true,
+    text = "Target Part", 
+    selected = Config.Aimbot.TargetPart,
+    multi = false,
+    values = {"Head", "HumanoidRootPart", "Torso", "LeftArm", "RightArm", "LeftLeg", "RightLeg"},
+    flag = "Aimbot_Part",
+    callback = function(value)
+        Config.Aimbot.TargetPart = value
+    end
+})
+
+AimbotSection:AddColor({
+    enabled = true,
+    text = "FOV Circle Color",
+    color = Config.Aimbot.FOVColor,
+    flag = "FOV_Color",
+    callback = function(value)
+        Config.Aimbot.FOVColor = value
+    end
+})
+
+-- Visuals UI
+local VisualsSection = VisualTab:AddSection("World Modification", 1)
+
+VisualsSection:AddToggle({
+    enabled = true,
+    text = "Enable World Mods",
+    state = Config.WorldMods.Enabled,
+    flag = "World_Enabled",
+    callback = function(value)
+        Config.WorldMods.Enabled = value
+    end
+})
+
+VisualsSection:AddColor({
+    enabled = true,
+    text = "Terrain Color",
+    color = Config.WorldMods.TerrainColor,
+    flag = "Terrain_Color",
+    callback = function(value)
+        Config.WorldMods.TerrainColor = value
+    end
+})
+
+VisualsSection:AddColor({
+    enabled = true,
+    text = "Ambient Light",
+    color = Config.WorldMods.AmbientColor,
+    flag = "Ambient_Color",
+    callback = function(value)
+        Config.WorldMods.AmbientColor = value
+    end
+})
+
+VisualsSection:AddSlider({
+    enabled = true,
+    text = "Brightness",
+    flag = "World_Brightness",
+    suffix = "x",
+    min = 0,
+    max = 5,
+    increment = 0.1,
+    value = Config.WorldMods.BrightnessLevel,
+    callback = function(value)
+        Config.WorldMods.BrightnessLevel = value
+    end
+})
+
+local CameraSection = VisualTab:AddSection("Camera", 2)
+
+CameraSection:AddToggle({
+    enabled = true,
+    text = "Custom FOV",
+    state = Config.Camera.CustomFOV,
+    flag = "Custom_FOV",
+    callback = function(value)
+        Config.Camera.CustomFOV = value
+    end
+})
+
+CameraSection:AddSlider({
+    enabled = true,
+    text = "FOV Value",
+    flag = "FOV_Value",
+    suffix = "°",
+    min = 30,
+    max = 120,
+    increment = 1,
+    value = Config.Camera.FOVValue,
+    callback = function(value)
+        Config.Camera.FOVValue = value
+    end
+})
+
 -- Initialize functionality
 thread(function()
     -- Set up core systems
@@ -1554,6 +1952,10 @@ thread(function()
     setupParachuteGlider()
     setupVehicleLockOnExit()
     trackCasinoCode()
+    setupAntiAim()
+    setupWorldMods()
+    setupCameraFOV()
+    setupAimbot()
     
     -- Send a notification when everything is ready
     local loadTime = string.format("%.2f", os.clock() - loadStartTime)
