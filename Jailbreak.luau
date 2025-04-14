@@ -3,6 +3,11 @@ if _G.ScriptAlreadyRunning then
 end
 _G.ScriptAlreadyRunning = true
 
+local placeID = 606849621
+if game.PlaceId ~= placeID then
+    return
+end
+
 -- Initialize the UI Library
 local library = loadstring(game:HttpGet("https://raw.githubusercontent.com/drillygzzly/Roblox-UI-Libs/main/1%20Tokyo%20Lib%20(FIXED)/Tokyo%20Lib%20Source.lua"))({
     cheatname = "Project KILLD", -- watermark text
