@@ -125,7 +125,12 @@ local Config = {
         FOVColor = Color3.fromRGB(255, 255, 255),
         TeamCheck = true,
         TargetPart = "Head", -- Head, Torso, etc.
-        Smoothness = 0.5 -- Lower = faster (for visible aimbot)
+        Smoothness = 0.5, -- Lower = faster (for visible aimbot)
+        WallCheck = true, -- New: Check for walls
+        VisibilityCheck = true, -- New: Check visibility
+        TargetPriority = "FOV", -- FOV or Distance based targeting
+        HitChance = 100, -- New: Hit chance percentage
+        HitboxExpansion = 0.5 -- New: Make hitboxes easier to hit
     },
     Camera = {
         CustomFOV = false,
@@ -145,6 +150,15 @@ local bankTruck = true
 local wallChildren = {}
 local equippeditems = {}
 local casinoCode = "Checking..."
+
+-- Movement state variables
+local movementDirection = Vector3.new()
+local antiAimRotation = 0
+
+-- Silent aim state variables
+local silentAimTarget = nil
+local originalFireServer = nil
+local originalInvokeServer = nil
 
 -- Utility Functions
 local function thread(func)
@@ -288,42 +302,362 @@ local function getVelocity(pos1, pos2, speed)
     return (distance/mag) * speed
 end
 
--- Function to implement spinbot
-local function setupAntiAim()
+-- Fix for isVisible function (replace your current isVisible function)
+local function isVisible(origin, target)
+    if not Config.Aimbot.VisibilityCheck then return true end
+    
+    -- Create ray from origin to target
+    local direction = (target.Position - origin).Unit * 1000
+    local ray = Ray.new(origin, direction)
+    
+    -- Setup ignore list safely (avoid "Parent is not a valid member" error)
+    local ignoreList = {LocalPlayer.Character}
+    
+    -- Add target's parent to ignore list only if it exists
+    if target and target.Parent then
+        table.insert(ignoreList, target.Parent)
+    end
+    
+    -- Add walls to ignore list if wall shooting is enabled
+    if Config.Toggles.ShootThroughWalls then
+        for _, wall in ipairs(wallChildren) do
+            table.insert(ignoreList, wall)
+        end
+    end
+    
+    -- Check ray collision
+    local hit, position = workspace:FindPartOnRayWithIgnoreList(ray, ignoreList)
+    
+    -- Consider it visible if hit point is close to target
+    if hit then
+        local hitDistance = (position - target.Position).Magnitude
+        return hitDistance < 5 -- 5 studs tolerance
+    end
+    
+    return true
+end
+
+-- Integrated movement and anti-aim system
+local function setupIntegratedMovement()
     local lastUpdateTime = tick()
-    local currentRotation = 0
     
     RunService.Heartbeat:Connect(function()
-        if not Config.AntiAim.Enabled then return end
-        if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return end
-        
-        local hrp = LocalPlayer.Character.HumanoidRootPart
         local deltaTime = tick() - lastUpdateTime
         lastUpdateTime = tick()
         
-        if Config.AntiAim.SpinMode == "Spin" then
-            -- Regular spinning motion
-            currentRotation = currentRotation + deltaTime * Config.AntiAim.SpinSpeed * 360
-            if currentRotation >= 360 then currentRotation = currentRotation - 360 end
+        -- Get character root part
+        local hrp = nil
+        local vehicle = nil
+        local flySpeed = Config.Movement.FlySpeed
+        local maxDistance = flySpeed * 2
+        
+        -- Check if we're in a vehicle
+        vehicle = getVehicleModel()
+        if vehicle and isDriverOfVehicle() then
+            hrp = vehicle.PrimaryPart
+        else
+            if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
+                if LocalPlayer.Character.Humanoid.Health > 0 and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+                    hrp = LocalPlayer.Character.HumanoidRootPart
+                end
+            end
             
-            -- Apply rotation
-            hrp.CFrame = CFrame.new(hrp.Position) * 
-                        CFrame.Angles(math.rad(Config.AntiAim.PitchOffset), 
-                                     math.rad(currentRotation + Config.AntiAim.YawOffset), 0)
-                                     
-        elseif Config.AntiAim.SpinMode == "Jitter" then
-            -- Rapid direction changes
-            currentRotation = (math.floor(tick() * Config.AntiAim.SpinSpeed) % 2 == 0) and 90 or -90
+            if flySpeed > 150 then
+                flySpeed = 150 -- Cap speed when not in vehicle
+            end
+        end
+        
+        if not hrp then return end
+        
+        -- Calculate movement direction
+        local movementVelocity = Vector3.new(0, 0, 0)
+        
+        if flying and Config.Movement.FlyEnabled then
+            local frontOffset = CFrame.new() + Vector3.new(0, 0, -maxDistance)
+            local backOffset = CFrame.new() + Vector3.new(0, 0, maxDistance)
+            local leftOffset = CFrame.new() + Vector3.new(-maxDistance, 0, 0)
+            local rightOffset = CFrame.new() + Vector3.new(maxDistance, 0, 0)
+            local upOffset = CFrame.new() + Vector3.new(0, maxDistance, 0)
+            local downOffset = CFrame.new() + Vector3.new(0, -maxDistance, 0)
             
-            hrp.CFrame = CFrame.new(hrp.Position) * 
-                        CFrame.Angles(math.rad(Config.AntiAim.PitchOffset), 
-                                     math.rad(currentRotation + Config.AntiAim.YawOffset), 0)
-                                     
-        elseif Config.AntiAim.SpinMode == "Static" then
-            -- Fixed angle
-            hrp.CFrame = CFrame.new(hrp.Position) * 
-                        CFrame.Angles(math.rad(Config.AntiAim.PitchOffset), 
-                                     math.rad(Config.AntiAim.YawOffset), 0)
+            -- Reset rotation velocity if we're flying
+            hrp.RotVelocity = Vector3.new()
+            
+            -- Calculate movement directions based on key presses
+            if keyDown(Enum.KeyCode.W) then
+                movementVelocity = movementVelocity + getVelocity(hrp.Position, (hrp.CFrame * frontOffset).Position, flySpeed)
+            end
+            
+            if keyDown(Enum.KeyCode.S) then
+                movementVelocity = movementVelocity + getVelocity(hrp.Position, (hrp.CFrame * backOffset).Position, flySpeed)
+            end
+            
+            if keyDown(Enum.KeyCode.A) then
+                movementVelocity = movementVelocity + getVelocity(hrp.Position, (hrp.CFrame * leftOffset).Position, flySpeed)
+            end
+            
+            if keyDown(Enum.KeyCode.D) then
+                movementVelocity = movementVelocity + getVelocity(hrp.Position, (hrp.CFrame * rightOffset).Position, flySpeed)
+            end
+            
+            if keyDown(Enum.KeyCode.E) then
+                movementVelocity = movementVelocity + getVelocity(hrp.Position, (CFrame.new(hrp.Position) * upOffset).Position, flySpeed)
+            end
+            
+            if keyDown(Enum.KeyCode.Q) then
+                movementVelocity = movementVelocity + getVelocity(hrp.Position, (CFrame.new(hrp.Position) * downOffset).Position, flySpeed)
+            end
+            
+            -- Apply velocity
+            hrp.Velocity = movementVelocity
+            
+            -- Save current position if we're not moving
+            if not keyDown(Enum.KeyCode.W) and not keyDown(Enum.KeyCode.A) and not keyDown(Enum.KeyCode.S) and 
+               not keyDown(Enum.KeyCode.D) and not keyDown(Enum.KeyCode.Q) and not keyDown(Enum.KeyCode.E) then
+                flyPos = hrp.Position
+            else
+                flyPos = hrp.Position
+            end
+        end
+        
+        -- Handle anti-aim (rotation) separately from movement
+        if Config.AntiAim.Enabled then
+            -- Only apply anti-aim if we're not in a vehicle
+            if not vehicle then
+                -- Update rotation based on anti-aim settings
+                if Config.AntiAim.SpinMode == "Spin" then
+                    -- Regular spinning motion
+                    antiAimRotation = antiAimRotation + deltaTime * Config.AntiAim.SpinSpeed * 360
+                    if antiAimRotation >= 360 then antiAimRotation = antiAimRotation - 360 end
+                    
+                    -- Preserve position but apply rotation
+                    local currentPos = hrp.Position
+                    hrp.CFrame = CFrame.new(currentPos) * 
+                                CFrame.Angles(math.rad(Config.AntiAim.PitchOffset), 
+                                             math.rad(antiAimRotation + Config.AntiAim.YawOffset), 0)
+                                             
+                elseif Config.AntiAim.SpinMode == "Jitter" then
+                    -- Rapid direction changes
+                    antiAimRotation = (math.floor(tick() * Config.AntiAim.SpinSpeed) % 2 == 0) and 90 or -90
+                    
+                    -- Preserve position but apply rotation
+                    local currentPos = hrp.Position
+                    hrp.CFrame = CFrame.new(currentPos) * 
+                                CFrame.Angles(math.rad(Config.AntiAim.PitchOffset), 
+                                             math.rad(antiAimRotation + Config.AntiAim.YawOffset), 0)
+                                             
+                elseif Config.AntiAim.SpinMode == "Static" then
+                    -- Fixed angle, apply once
+                    local currentPos = hrp.Position
+                    hrp.CFrame = CFrame.new(currentPos) * 
+                                CFrame.Angles(math.rad(Config.AntiAim.PitchOffset), 
+                                             math.rad(Config.AntiAim.YawOffset), 0)
+                end
+                
+                -- If flying is also enabled, make sure we maintain the appropriate forward direction 
+                -- so that W, A, S, D controls work relative to camera
+                if flying and Config.Movement.FlyEnabled then
+                    local lookDir = (Camera.CFrame.LookVector * Vector3.new(1, 0, 1)).Unit
+                    local rightDir = Camera.CFrame.RightVector
+                    local currentPos = hrp.Position
+                    
+                    -- This preserves anti-aim for others but lets fly controls work as expected
+                    if movementVelocity.Magnitude > 0 then
+                        -- Only update look direction when actively moving
+                        hrp.CFrame = CFrame.new(currentPos, currentPos + lookDir) * 
+                                     CFrame.Angles(math.rad(Config.AntiAim.PitchOffset), 
+                                                  math.rad(antiAimRotation + Config.AntiAim.YawOffset), 0)
+                    end
+                end
+            end
+        end
+        
+        -- If fly enabled but not moving, maintain position
+        if flying and Config.Movement.FlyEnabled and movementVelocity.Magnitude <= 0 then
+            if not Config.AntiAim.Enabled then
+                -- If anti-aim is not enabled, just look at where camera is facing
+                hrp.CFrame = CFrame.new(flyPos, Camera.CFrame.Position + Camera.CFrame.LookVector * 10)
+            end
+            hrp.Velocity = Vector3.new(0, 0, 0)
+        end
+    end)
+    
+    -- Keybind for fly
+    UserInputService.InputBegan:Connect(function(input, processed)
+        if processed then return end
+        
+        if input.KeyCode == Enum.KeyCode.F and UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
+            flying = not flying
+            Config.Movement.FlyEnabled = flying
+            
+            if flying then
+                if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
+                    LocalPlayer.Character.Humanoid.CameraOffset = Vector3.new(2, 0, 0)
+                end
+                notify("Fly enabled - Press CTRL+F to disable")
+            else
+                if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
+                    LocalPlayer.Character.Humanoid.CameraOffset = Vector3.new(0, 0, 0)
+                end
+                notify("Fly disabled")
+            end
+        end
+    end)
+end
+
+-- Completely revised silent aim implementation
+local function setupSilentAim()
+    local FOVCircle = Drawing.new("Circle")
+    FOVCircle.Thickness = 2
+    FOVCircle.NumSides = 100
+    FOVCircle.Radius = Config.Aimbot.FOV
+    FOVCircle.Filled = false
+    FOVCircle.Visible = false
+    FOVCircle.ZIndex = 999
+    FOVCircle.Transparency = 1
+    FOVCircle.Color = Config.Aimbot.FOVColor
+
+    -- Improved findBestTarget function with error handling
+    local function findBestTarget()
+        local closestDistance = math.huge
+        local closestPlayer = nil
+        local closestFOVDistance = Config.Aimbot.FOV
+        local closestFOVPlayer = nil
+        
+        for _, player in pairs(Players:GetPlayers()) do
+            if player == LocalPlayer then continue end
+            
+            -- Basic validation
+            if not player.Character or 
+            not player.Character:FindFirstChild("Humanoid") or 
+            player.Character.Humanoid.Health <= 0 then 
+                continue 
+            end
+            
+            -- Get target part with fallback
+            local targetPart = player.Character:FindFirstChild(Config.Aimbot.TargetPart)
+            if not targetPart then 
+                targetPart = player.Character:FindFirstChild("HumanoidRootPart")
+                if not targetPart then continue end
+            end
+            
+            -- Team check
+            if Config.Aimbot.TeamCheck and player.Team == LocalPlayer.Team then continue end
+            
+            -- Visibility/wall check with error handling
+            if Config.Aimbot.WallCheck then
+                local success, result = pcall(function()
+                    return isVisible(Camera.CFrame.Position, targetPart)
+                end)
+                
+                if not success or not result then continue end
+            end
+            
+            -- Screen position check
+            local screenPos, onScreen = Camera:WorldToViewportPoint(targetPart.Position)
+            if not onScreen then continue end
+            
+            -- Calculate distances
+            local mousePos = Vector2.new(Mouse.X, Mouse.Y)
+            local screenPos2D = Vector2.new(screenPos.X, screenPos.Y)
+            local fovDistance = (screenPos2D - mousePos).Magnitude
+            local actualDistance = (targetPart.Position - Camera.CFrame.Position).Magnitude
+            
+            -- Track closest by FOV
+            if fovDistance < closestFOVDistance then
+                closestFOVDistance = fovDistance
+                closestFOVPlayer = player
+            end
+            
+            -- Track closest by distance
+            if actualDistance < closestDistance then
+                closestDistance = actualDistance
+                closestPlayer = player
+            end
+        end
+        
+        -- Return target based on priority setting
+        if Config.Aimbot.TargetPriority == "FOV" then
+            return closestFOVPlayer
+        else -- "Distance"
+            return closestPlayer
+        end
+    end
+    
+    -- Implementation for the namecall hook in your silent aim
+    local mt = getrawmetatable(game)
+    local oldNamecall = mt.__namecall
+    setreadonly(mt, false)
+
+    mt.__namecall = newcclosure(function(self, ...)
+        local args = {...}
+        local method = getnamecallmethod()
+        
+        -- Apply silent aim only to Fire/InvokeServer calls
+        if Config.Aimbot.Enabled and Config.Aimbot.SilentAim and 
+        (method == "FireServer" or method == "InvokeServer") and 
+        typeof(self) == "Instance" then
+            
+            -- Check if this is a weapon remote event
+            local remoteName = self.Name:lower()
+            if remoteName:find("hit") or remoteName:find("fire") or remoteName:find("damage") or remoteName:find("bullet") then
+                -- Hit chance check
+                if math.random(1, 100) > Config.Aimbot.HitChance then
+                    return oldNamecall(self, ...)
+                end
+                
+                -- Find target
+                local target = findBestTarget()
+                if target then
+                    -- Get target part
+                    local targetPart = target.Character:FindFirstChild(Config.Aimbot.TargetPart) or 
+                                    target.Character:FindFirstChild("HumanoidRootPart")
+                    
+                    -- Modify arguments based on common remote patterns
+                    if typeof(args[1]) == "Instance" and args[1]:IsA("BasePart") then
+                        args[1] = targetPart
+                    elseif typeof(args[1]) == "CFrame" then
+                        args[1] = targetPart.CFrame
+                    elseif typeof(args[1]) == "Vector3" then
+                        args[1] = targetPart.Position
+                    elseif typeof(args[1]) == "table" then
+                        if args[1].Part then args[1].Part = targetPart end
+                        if args[1].Position then args[1].Position = targetPart.Position end
+                        if args[1].hit then args[1].hit = targetPart end
+                    end
+                    
+                    return oldNamecall(self, unpack(args))
+                end
+            end
+        end
+        
+        return oldNamecall(self, ...)
+    end)
+
+    setreadonly(mt, true)
+    
+    -- Update FOV circle
+    RunService.RenderStepped:Connect(function()
+        FOVCircle.Position = UserInputService:GetMouseLocation()
+        FOVCircle.Radius = Config.Aimbot.FOV
+        FOVCircle.Visible = Config.Aimbot.Enabled and Config.Aimbot.FOVVisible
+        FOVCircle.Color = Config.Aimbot.FOVColor
+        
+        -- Update target if aimbot is enabled
+        if Config.Aimbot.Enabled and Config.Aimbot.SilentAim then
+            silentAimTarget = findBestTarget()
+        else
+            silentAimTarget = nil
+        end
+    end)
+    
+    -- Cleanup when script is stopped
+    game:GetService("Players").PlayerRemoving:Connect(function(player)
+        if player == LocalPlayer then
+            FOVCircle:Remove()
+            setreadonly(mt, false)
+            mt.__namecall = oldNamecall
+            setreadonly(mt, true)
         end
     end)
 end
@@ -599,20 +933,6 @@ local function setupCrateESP()
     end)
 end
 
--- Aimbot and FOV Circle
-local FOVCircle = Drawing.new("Circle")
-FOVCircle.Thickness = 2
-FOVCircle.NumSides = 50
-FOVCircle.Radius = 200
-FOVCircle.Filled = false
-FOVCircle.Visible = false
-FOVCircle.ZIndex = 999
-FOVCircle.Transparency = 1
-FOVCircle.Color = Color3.fromRGB(255, 255, 255)
-
--- Target for aimbot
-local Target = nil
-
 -- Functions to implement features
 local function setupWorldMods()
     -- Setup terrain color changing
@@ -639,78 +959,6 @@ local function setupCameraFOV()
         if Config.Camera.CustomFOV then
             workspace.CurrentCamera.FieldOfView = Config.Camera.FOVValue
         end
-    end)
-end
-
-local function getClosestPlayerToCursor(fov)
-    local closestPlayer = nil
-    local shortestDistance = fov or math.huge
-    
-    for _, player in pairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("Humanoid") and 
-           player.Character.Humanoid.Health > 0 and player.Character:FindFirstChild(Config.Aimbot.TargetPart) then
-            
-            -- Team check if enabled
-            if Config.Aimbot.TeamCheck and player.Team == LocalPlayer.Team then
-                continue
-            end
-            
-            local pos = Camera:WorldToViewportPoint(player.Character[Config.Aimbot.TargetPart].Position)
-            if pos.Z > 0 then
-                local screenPos = Vector2.new(pos.X, pos.Y)
-                local mousePos = Vector2.new(Mouse.X, Mouse.Y)
-                local distance = (screenPos - mousePos).Magnitude
-                
-                if distance < shortestDistance then
-                    closestPlayer = player
-                    shortestDistance = distance
-                end
-            end
-        end
-    end
-    
-    return closestPlayer
-end
-
-local function setupAimbot()
-    -- Manage FOV circle visibility
-    RunService.RenderStepped:Connect(function()
-        FOVCircle.Position = Vector2.new(Mouse.X, Mouse.Y)
-        FOVCircle.Radius = Config.Aimbot.FOV
-        FOVCircle.Visible = Config.Aimbot.Enabled and Config.Aimbot.FOVVisible
-        FOVCircle.Color = Config.Aimbot.FOVColor
-    end)
-    
-    -- Silent aim by intercepting hit registration
-    local oldNamecall
-    oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
-        local args = {...}
-        local method = getnamecallmethod()
-        
-        -- Look for hit registration remote events (may need to adjust based on the game)
-        if Config.Aimbot.Enabled and (method == "FireServer" or method == "InvokeServer") and 
-           typeof(self) == "Instance" and (self.Name:find("Hit") or self.Name:find("Damage")) then
-            
-            Target = getClosestPlayerToCursor(Config.Aimbot.FOV)
-            
-            if Target and Target.Character and Target.Character:FindFirstChild(Config.Aimbot.TargetPart) then
-                -- Check team if enabled
-                if Config.Aimbot.TeamCheck and Target.Team == LocalPlayer.Team then
-                    return oldNamecall(self, ...)
-                end
-                
-                -- Modify the hit arguments - exact structure depends on the game
-                -- We'll need to do some investigation to find the exact format
-                -- This is a simplified example
-                if typeof(args[1]) == "Instance" then
-                    args[1] = Target.Character[Config.Aimbot.TargetPart]
-                elseif typeof(args[1]) == "CFrame" then
-                    args[1] = Target.Character[Config.Aimbot.TargetPart].CFrame
-                end
-            end
-        end
-        
-        return oldNamecall(self, ...)
     end)
 end
 
@@ -850,97 +1098,6 @@ local function setupRobberyNotifier()
     end)
 end
 
-local function setupFlyHack()
-    -- Implement the fly functionality
-    RunService.Heartbeat:Connect(function()
-        if not Config.Movement.FlyEnabled then return end
-        
-        local hrp
-        local flySpeed = Config.Movement.FlySpeed
-        local maxDistance = flySpeed * 2
-        local vehicle = getVehicleModel()
-        
-        if vehicle and isDriverOfVehicle() then
-            hrp = vehicle.PrimaryPart
-        else
-            if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") and LocalPlayer.Character.Humanoid.RootPart then
-                hrp = LocalPlayer.Character.Humanoid.RootPart
-            end
-            if flySpeed > 150 then
-                flySpeed = 150 -- Cap speed when not in vehicle
-            end
-        end
-        
-        if hrp then
-            local frontOffset = CFrame.new() + Vector3.new(0, 0, -maxDistance)
-            local backOffset = CFrame.new() + Vector3.new(0, 0, maxDistance)
-            local leftOffset = CFrame.new() + Vector3.new(-maxDistance, 0, 0)
-            local rightOffset = CFrame.new() + Vector3.new(maxDistance, 0, 0)
-            local upOffset = CFrame.new() + Vector3.new(0, maxDistance, 0)
-            local downOffset = CFrame.new() + Vector3.new(0, -maxDistance, 0)
-            local velocity = Vector3.new()
-            
-            if flying then
-                hrp.RotVelocity = Vector3.new()
-                
-                if keyDown(Enum.KeyCode.W) then
-                    velocity = velocity + getVelocity(hrp.Position, (hrp.CFrame * frontOffset).Position, flySpeed)
-                end
-                
-                if keyDown(Enum.KeyCode.S) then
-                    velocity = velocity + getVelocity(hrp.Position, (hrp.CFrame * backOffset).Position, flySpeed)
-                end
-                
-                if keyDown(Enum.KeyCode.A) then
-                    velocity = velocity + getVelocity(hrp.Position, (hrp.CFrame * leftOffset).Position, flySpeed)
-                end
-                
-                if keyDown(Enum.KeyCode.D) then
-                    velocity = velocity + getVelocity(hrp.Position, (hrp.CFrame * rightOffset).Position, flySpeed)
-                end
-                
-                if keyDown(Enum.KeyCode.E) then
-                    velocity = velocity + getVelocity(hrp.Position, (CFrame.new(hrp.Position) * upOffset).Position, flySpeed)
-                end
-                
-                if keyDown(Enum.KeyCode.Q) then
-                    velocity = velocity + getVelocity(hrp.Position, (CFrame.new(hrp.Position) * downOffset).Position, flySpeed)
-                end
-                
-                hrp.Velocity = velocity
-                hrp.CFrame = CFrame.new(hrp.Position, (Camera.CFrame * frontOffset).Position)
-            end
-            
-            if flying and not keyDown(Enum.KeyCode.W) and not keyDown(Enum.KeyCode.A) and not keyDown(Enum.KeyCode.S) and not keyDown(Enum.KeyCode.D) and not keyDown(Enum.KeyCode.Q) and not keyDown(Enum.KeyCode.E) then
-                hrp.CFrame = CFrame.new(flyPos, (Camera.CFrame * frontOffset).Position)
-                hrp.Velocity = Vector3.new()
-            else
-                flyPos = hrp.Position
-            end
-        end
-    end)
-    
-    -- Keybind for fly
-    UserInputService.InputBegan:Connect(function(input, processed)
-        if processed then return end
-        
-        if input.KeyCode == Enum.KeyCode.F and UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
-            flying = not flying
-            Config.Movement.FlyEnabled = flying
-            
-            if flying then
-                if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
-                    LocalPlayer.Character.Humanoid.CameraOffset = Vector3.new(2, 0, 0)
-                end
-            else
-                if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
-                    LocalPlayer.Character.Humanoid.CameraOffset = Vector3.new(0, 0, 0)
-                end
-            end
-        end
-    end)
-end
-
 local function setupWalkSpeed()
     RunService.RenderStepped:Connect(function()
         if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
@@ -951,11 +1108,11 @@ end
 
 local function setupNoRagdoll()
     if ReplicatedStorage.Module and ReplicatedStorage.Module:FindFirstChild("AlexRagdoll") then
-        require(ReplicatedStorage.Module.AlexRagdoll).Ragdoll = nil
+        require(ReplicatedStorage.Module.AlexRagdoll).Ragdoll = function() return end
     end
     
     if ReplicatedStorage.Game and ReplicatedStorage.Game:FindFirstChild("Falling") then
-        require(ReplicatedStorage.Game.Falling).StartRagdolling = nil
+        require(ReplicatedStorage.Game.Falling).StartRagdolling = function() return end
     end
     
     notify("Removed ragdolling. You may still take fall damage.")
@@ -963,12 +1120,18 @@ end
 
 local function setupKeycardBypass()
     if ReplicatedStorage.Game and ReplicatedStorage.Game:FindFirstChild("PlayerUtils") then
-        require(ReplicatedStorage.Game.PlayerUtils).hasKey = function()
-            return true
+        local PlayerUtils = require(ReplicatedStorage.Game.PlayerUtils)
+        if PlayerUtils.hasKey then
+            PlayerUtils.hasKey = function()
+                return true
+            end
+            notify("Keycard bypass enabled")
+        else
+            notify("Could not find hasKey function")
         end
+    else
+        notify("Could not find PlayerUtils module")
     end
-    
-    notify("Keycard bypass enabled")
 end
 
 local function setupHoldEBypass()
@@ -988,6 +1151,8 @@ local function setupHoldEBypass()
         }
         
         RunService.Heartbeat:Connect(function()
+            if not moduleUI.CircleAction or not moduleUI.CircleAction.Specs then return end
+            
             for _, spec in pairs(moduleUI.CircleAction.Specs) do
                 local actionName = spec.Name and spec.Name:lower() or ""
                 local shouldBypass = true
@@ -1006,6 +1171,8 @@ local function setupHoldEBypass()
         end)
         
         notify("Hold E Bypass enabled. Cannot be used with: donut shop, gas station, air drops, passenger train items, and oil rig dynamite.")
+    else
+        notify("Could not find UI module")
     end
 end
 
@@ -1041,6 +1208,10 @@ local function setupParachuteGlider()
                 paraModule.Glider()
             end
         end)
+        
+        notify("Parachute/glider mods enabled")
+    else
+        notify("Could not find paraglide module")
     end
 end
 
@@ -1069,7 +1240,13 @@ local function setupVehicleLockOnExit()
                 
                 return originalExit(...)
             end
+            
+            notify("Vehicle lock on exit enabled")
+        else
+            notify("Could not find vehicle exit handler")
         end
+    else
+        notify("Could not find vehicle utils module")
     end
 end
 
@@ -1160,6 +1337,10 @@ local function setupWallShooting()
             
             return originalShoot(...)
         end
+        
+        notify("Wall shooting enabled")
+    else
+        notify("Could not find gun module")
     end
 end
 
@@ -1184,7 +1365,10 @@ end
 
 local function modifyGuns()
     local itemConfig = ReplicatedStorage:FindFirstChild("Game"):FindFirstChild("ItemConfig")
-    if not itemConfig then return end
+    if not itemConfig then
+        notify("Could not find item config")
+        return
+    end
     
     -- Modify all guns
     for _, module in pairs(itemConfig:GetChildren()) do
@@ -1797,7 +1981,7 @@ AASection:AddSlider({
 local AimbotTab = Window:AddTab("Aimbot")
 local VisualTab = Window:AddTab("Visuals")
 
--- Aimbot UI - Simplified for silent aim only
+-- Aimbot UI
 local AimbotSection = AimbotTab:AddSection("Silent Aim", 1)
 
 AimbotSection:AddToggle({
@@ -1818,6 +2002,16 @@ AimbotSection:AddToggle({
     flag = "Aimbot_TeamCheck",
     callback = function(value)
         Config.Aimbot.TeamCheck = value
+    end
+})
+
+AimbotSection:AddToggle({
+    enabled = true,
+    text = "Wall Check",
+    state = Config.Aimbot.WallCheck,
+    flag = "Aimbot_WallCheck",
+    callback = function(value)
+        Config.Aimbot.WallCheck = value
     end
 })
 
@@ -1845,6 +2039,20 @@ AimbotSection:AddSlider({
     end
 })
 
+AimbotSection:AddSlider({
+    enabled = true,
+    text = "Hit Chance",
+    flag = "Aimbot_HitChance",
+    suffix = "%",
+    min = 1,
+    max = 100,
+    increment = 1,
+    value = Config.Aimbot.HitChance,
+    callback = function(value)
+        Config.Aimbot.HitChance = value
+    end
+})
+
 AimbotSection:AddList({
     enabled = true,
     text = "Target Part", 
@@ -1854,6 +2062,18 @@ AimbotSection:AddList({
     flag = "Aimbot_Part",
     callback = function(value)
         Config.Aimbot.TargetPart = value
+    end
+})
+
+AimbotSection:AddList({
+    enabled = true,
+    text = "Target Priority", 
+    selected = Config.Aimbot.TargetPriority,
+    multi = false,
+    values = {"FOV", "Distance"},
+    flag = "Aimbot_Priority",
+    callback = function(value)
+        Config.Aimbot.TargetPriority = value
     end
 })
 
@@ -1946,16 +2166,15 @@ thread(function()
     setupESP()
     setupCrateESP()
     setupRobberyNotifier()
-    setupFlyHack()
+    setupIntegratedMovement() -- Use integrated movement (fixes fly and anti-aim conflict)
     setupWalkSpeed()
     setupWallShooting()
     setupParachuteGlider()
     setupVehicleLockOnExit()
     trackCasinoCode()
-    setupAntiAim()
     setupWorldMods()
     setupCameraFOV()
-    setupAimbot()
+    setupSilentAim() -- Use the new silent aim implementation
     
     -- Send a notification when everything is ready
     local loadTime = string.format("%.2f", os.clock() - loadStartTime)
