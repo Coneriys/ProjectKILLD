@@ -1258,7 +1258,7 @@ function KILLDUI:CreateTab(windowObj, name)
     tabText.TextColor3 = KILLDUI.Config.Colors.Text
     tabText.Font = KILLDUI.Config.Fonts.Button
     tabText.TextSize = KILLDUI.Config.FontSizes.Text
-    tabText.Text = name
+    tabText.Text = toString(name)
     tabText.Parent = tabButton
     
     -- Создаем контейнер содержимого вкладки
