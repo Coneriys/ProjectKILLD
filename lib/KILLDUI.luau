@@ -1240,7 +1240,7 @@ function KILLDUI:CreateTab(windowObj, name)
     
     -- Создаем кнопку вкладки
     local tabButton = createRoundedFrame(
-        "Tab_" .. tostring(name), -- Преобразуем name в строку с помощью tostring()
+        "Tab_" .. tostring(name),  -- Преобразуем name в строку
         UDim2.new(0, 100, 1, -10),
         UDim2.new(0, 0, 0, 5),
         KILLDUI.Config.Colors.Secondary,
@@ -1258,12 +1258,12 @@ function KILLDUI:CreateTab(windowObj, name)
     tabText.TextColor3 = KILLDUI.Config.Colors.Text
     tabText.Font = KILLDUI.Config.Fonts.Button
     tabText.TextSize = KILLDUI.Config.FontSizes.Text
-    tabText.Text = tostring(name)
+    tabText.Text = tostring(name)  -- Преобразуем name в строку
     tabText.Parent = tabButton
     
     -- Создаем контейнер содержимого вкладки
     local tabContent = createRoundedFrame(
-        "Content_" .. name,
+        "Content_" .. tostring(name),  -- Преобразуем name в строку
         UDim2.new(1, -10, 1, -10),
         UDim2.new(0, 5, 0, 5),
         Color3.fromRGB(30, 30, 40),
@@ -1320,17 +1320,20 @@ function KILLDUI:CreateTab(windowObj, name)
         windowObj.TabContainer.ActiveTab = tab
     end
     
-    -- Обработчик нажатия
-    tabClickButton.MouseButton1Click:Connect(function()
-        activateTab(windowObj.TabContainer.Tabs[#windowObj.TabContainer.Tabs])
-    end)
-    
     -- Создаем объект вкладки
     local tabObj = {
         Button = tabButton,
         Content = tabContent,
         ScrollFrame = contentScroll
     }
+    
+    -- Добавляем вкладку в список
+    table.insert(windowObj.TabContainer.Tabs, tabObj)
+    
+    -- Обработчик нажатия - теперь правильно ссылается на объект
+    tabClickButton.MouseButton1Click:Connect(function()
+        activateTab(tabObj)
+    end)
     
     -- Добавляем методы для создания элементов
     tabObj.CreateButton = function(text, callback)
@@ -1356,10 +1359,6 @@ function KILLDUI:CreateTab(windowObj, name)
     tabObj.CreateDropdown = function(text, options, callback)
         return self:CreateDropdown(contentScroll, text, options, callback)
     end
-    
-    -- Добавляем вкладку в список
-    -- Добавляем вкладку в список
-    table.insert(windowObj.TabContainer.Tabs, tabObj)
     
     -- Активируем первую вкладку
     if #windowObj.TabContainer.Tabs == 1 then
