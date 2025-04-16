@@ -495,8 +495,10 @@ function KILLDUI:CreateWindow(options)
         end
         
         -- Обработка нажатий
-        toggleBackground.MouseButton1Click:Connect(function()
-            toggle:Set(not toggle.Value)
+        toggleBackground.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                toggle:Set(not toggle.Value)
+            end
         end)
         
         toggleFrame.MouseButton1Click:Connect(function()
