@@ -1240,7 +1240,7 @@ function KILLDUI:CreateTab(windowObj, name)
     
     -- Создаем кнопку вкладки
     local tabButton = createRoundedFrame(
-        "Tab_" .. name,
+        "Tab_" .. tostring(name), -- Преобразуем name в строку с помощью tostring()
         UDim2.new(0, 100, 1, -10),
         UDim2.new(0, 0, 0, 5),
         KILLDUI.Config.Colors.Secondary,
